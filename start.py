@@ -2,47 +2,25 @@ import os
 import sys
 import subprocess
 import threading
-import time
 import logging
+import json
+import random
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def run_bot():
-    """Run the Telegram bot"""
-    try:
-        logger.info("🤖 Starting Telegram bot...")
-        subprocess.run([sys.executable, "bot.py"])
-    except Exception as e:
-        logger.error(f"Bot error: {e}")
-
-def run_webapp():
-    """Run the web server"""
-    try:
-        port = int(os.getenv('PORT', 8000))
-        logger.info(f"🌐 Starting web server on port {port}...")
-        subprocess.run([
-            sys.executable, "-m", "uvicorn",
-            "webapp:app",
-            "--host", "0.0.0.0",
-            "--port", str(port)
-        ])
-    except Exception as e:
-        logger.error(f"Webapp error: {e}")
-
 def generate_cards_if_needed():
     """Generate bingo cards if they don't exist"""
-    import json
-    import random
-    import os
-    
     cards_file = "static/bingo_cards.json"
+    
+    # Create static directory
+    os.makedirs("static", exist_ok=True)
+    
     if os.path.exists(cards_file):
         logger.info("✅ Cards already exist")
         return
     
     logger.info("📊 Generating 1000 bingo cards...")
-    os.makedirs("static", exist_ok=True)
     
     cards = []
     for card_id in range(1, 1001):
@@ -62,12 +40,36 @@ def generate_cards_if_needed():
     
     logger.info(f"✅ Generated {len(cards)} cards")
 
+def run_bot():
+    """Run the Telegram bot"""
+    try:
+        logger.info("🤖 Starting Telegram bot...")
+        # Use sys.executable to ensure we use the same Python interpreter
+        subprocess.run([sys.executable, "bot.py"])
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
+
+def run_webapp():
+    """Run the web server"""
+    try:
+        port = int(os.getenv('PORT', 8000))
+        logger.info(f"🌐 Starting web server on port {port}...")
+        # Run with uvicorn
+        subprocess.run([
+            sys.executable, "-m", "uvicorn",
+            "webapp:app",
+            "--host", "0.0.0.0",
+            "--port", str(port)
+        ])
+    except Exception as e:
+        logger.error(f"Webapp error: {e}")
+
 if __name__ == "__main__":
     logger.info("🚀 Starting Bingo Game System...")
     
     # Create necessary directories
-    os.makedirs("static", exist_ok=True)
     os.makedirs("templates", exist_ok=True)
+    os.makedirs("static", exist_ok=True)
     
     # Generate cards
     generate_cards_if_needed()
