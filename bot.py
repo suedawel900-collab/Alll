@@ -19,11 +19,9 @@ ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(","
 
 PUBLIC_URL = os.environ.get("RAILWAY_STATIC_URL")
 if not PUBLIC_URL:
-    PUBLIC_URL = "https://your-ngrok-url.ngrok.io"
+    PUBLIC_URL = "https://your-ngrok-url.ngrok.io"  # fallback for local testing
 
 WEBAPP_URL = f"{PUBLIC_URL}/webapp"
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{PUBLIC_URL}{WEBHOOK_PATH}"
 
 CARD_COST = 10
 MAX_CARDS_PER_PLAYER = 20
@@ -39,8 +37,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-telegram_app = Application.builder().token(BOT_TOKEN).updater(None).build()
 
+# --- Telegram Application (no webhook) ---
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+
+# --- Database helpers (same as before) ---
 DATABASE = 'bingo.db'
 
 def get_db():
@@ -114,6 +115,7 @@ def init_db():
 
 init_db()
 
+# --- Bingo board generation (same) ---
 def generate_board():
     col_ranges = [(1,15), (16,30), (31,45), (46,60), (61,75)]
     cols = []
@@ -146,6 +148,7 @@ BOARD_POOL = generate_unique_boards(1000)
 BOARD_LOCK = threading.Lock()
 logger.info(f"Generated {len(BOARD_POOL)} unique boards.")
 
+# --- Round state (same) ---
 active_round = {
     'id': None,
     'status': 'waiting',
@@ -310,7 +313,7 @@ threading.Thread(target=round_worker, daemon=True).start()
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-# --- Telegram command handlers ---
+# --- Telegram command handlers (same as before) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     db = get_db()
@@ -635,6 +638,7 @@ async def round_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Numbers called: {len(active_round['called_numbers'])}"
         )
 
+# Register command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("referral", referral))
 telegram_app.add_handler(CommandHandler("balance", balance))
@@ -648,7 +652,7 @@ telegram_app.add_handler(CommandHandler("start_round", start_round))
 telegram_app.add_handler(CommandHandler("next_round", next_round))
 telegram_app.add_handler(CommandHandler("round_info", round_info))
 
-# --- Flask endpoints for WebApp ---
+# --- Flask endpoints (unchanged) ---
 @app.route("/webapp")
 def webapp():
     return render_template("index.html")
@@ -779,20 +783,14 @@ def claim_bingo():
         else:
             return jsonify(success=False, message="No Bingo on your cards")
 
-@app.route(WEBHOOK_PATH, methods=["POST"])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    await telegram_app.process_update(update)
-    return "OK", 200
+# --- Start bot polling in background ---
+def start_bot():
+    logger.info("Starting Telegram bot polling...")
+    telegram_app.run_polling()
 
-@app.before_first_request
-async def set_webhook():
-    webhook_info = await telegram_app.bot.get_webhook_info()
-    if webhook_info.url != WEBHOOK_URL:
-        logger.info(f"Setting webhook to {WEBHOOK_URL}")
-        await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-    else:
-        logger.info("Webhook already set correctly")
+bot_thread = threading.Thread(target=start_bot, daemon=True)
+bot_thread.start()
 
+# --- Run Flask (for Railway, Gunicorn will call this) ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
