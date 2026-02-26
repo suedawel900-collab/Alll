@@ -6,7 +6,7 @@ import time
 import json
 import sqlite3
 from datetime import datetime
-from flask import Flask, request, render_template, jsonify, g
+from flask import Flask, request, render_template, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -38,84 +38,77 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# --- Telegram Application (no webhook) ---
+# --- Telegram Application (polling) ---
 telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# --- Database helpers (same as before) ---
+# --- Database helpers (thread‑safe, no Flask g) ---
 DATABASE = 'bingo.db'
 
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
-    return db
-
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+def get_db_connection():
+    """Return a new SQLite connection. Caller must close it."""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    with app.app_context():
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE,
-                balance INTEGER DEFAULT 0,
-                referrer_id INTEGER,
-                referral_bonus_given BOOLEAN DEFAULT 0,
-                signup_bonus_given BOOLEAN DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rounds (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT DEFAULT 'waiting',
-                start_time TIMESTAMP,
-                end_time TIMESTAMP,
-                prize_pool INTEGER DEFAULT 0
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS cards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                round_id INTEGER,
-                user_id INTEGER,
-                board TEXT,
-                bingo_claimed BOOLEAN DEFAULT 0,
-                FOREIGN KEY(round_id) REFERENCES rounds(id),
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS called_numbers (
-                round_id INTEGER,
-                number INTEGER,
-                called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(round_id) REFERENCES rounds(id)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS deposits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                amount INTEGER,
-                method TEXT,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-        ''')
-        db.commit()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER UNIQUE,
+            balance INTEGER DEFAULT 0,
+            referrer_id INTEGER,
+            referral_bonus_given BOOLEAN DEFAULT 0,
+            signup_bonus_given BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS rounds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT DEFAULT 'waiting',
+            start_time TIMESTAMP,
+            end_time TIMESTAMP,
+            prize_pool INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            round_id INTEGER,
+            user_id INTEGER,
+            board TEXT,
+            bingo_claimed BOOLEAN DEFAULT 0,
+            FOREIGN KEY(round_id) REFERENCES rounds(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS called_numbers (
+            round_id INTEGER,
+            number INTEGER,
+            called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(round_id) REFERENCES rounds(id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS deposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            method TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
-# --- Bingo board generation (same) ---
+# --- Bingo board generation ---
 def generate_board():
     col_ranges = [(1,15), (16,30), (31,45), (46,60), (61,75)]
     cols = []
@@ -148,7 +141,7 @@ BOARD_POOL = generate_unique_boards(1000)
 BOARD_LOCK = threading.Lock()
 logger.info(f"Generated {len(BOARD_POOL)} unique boards.")
 
-# --- Round state (same) ---
+# --- Round state (in-memory) ---
 active_round = {
     'id': None,
     'status': 'waiting',
@@ -162,15 +155,15 @@ round_lock = threading.Lock()
 
 def get_or_create_active_round():
     with round_lock:
-        db = get_db()
-        cursor = db.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT id FROM rounds WHERE status='waiting' LIMIT 1")
         row = cursor.fetchone()
         if row:
             round_id = row['id']
         else:
             cursor.execute("INSERT INTO rounds (status) VALUES ('waiting')")
-            db.commit()
+            conn.commit()
             round_id = cursor.lastrowid
         cursor.execute('''
             SELECT u.telegram_id, c.id as card_id, c.board
@@ -179,6 +172,7 @@ def get_or_create_active_round():
             WHERE c.round_id = ? AND c.bingo_claimed=0
         ''', (round_id,))
         rows = cursor.fetchall()
+        conn.close()
         players = {}
         for row in rows:
             tid = row['telegram_id']
@@ -197,11 +191,12 @@ def get_or_create_active_round():
 def reset_round(keep_players=False):
     with round_lock:
         if active_round['id']:
-            db = get_db()
-            cursor = db.cursor()
+            conn = get_db_connection()
+            cursor = conn.cursor()
             cursor.execute("UPDATE rounds SET status='finished', end_time=? WHERE id=?",
                            (datetime.now(), active_round['id']))
-            db.commit()
+            conn.commit()
+            conn.close()
         old_players = active_round['players'][:] if keep_players else []
         active_round['id'] = None
         active_round['status'] = 'waiting'
@@ -234,11 +229,12 @@ def round_worker():
                 active_round['called_numbers'].add(number)
                 active_round['last_call_time'] = now
 
-                db = get_db()
-                cursor = db.cursor()
+                conn = get_db_connection()
+                cursor = conn.cursor()
                 cursor.execute("INSERT INTO called_numbers (round_id, number) VALUES (?, ?)",
                                (active_round['id'], number))
-                db.commit()
+                conn.commit()
+                conn.close()
                 logger.info(f"Round {active_round['id']} called {number}")
 
                 for tid in active_round['players']:
@@ -251,13 +247,14 @@ def round_worker():
                         break
 
 def check_any_bingo(telegram_id):
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute('''
         SELECT board FROM cards
         WHERE round_id=? AND user_id=(SELECT id FROM users WHERE telegram_id=?)
     ''', (active_round['id'], telegram_id))
     rows = cursor.fetchall()
+    conn.close()
     called = active_round['called_numbers']
     for row in rows:
         board = json.loads(row['board'])
@@ -285,17 +282,19 @@ def check_bingo_board(board, called_numbers):
     return False
 
 def distribute_prize(winner_telegram_id):
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("SELECT prize_pool FROM rounds WHERE id=?", (active_round['id'],))
     row = cursor.fetchone()
     if not row:
+        conn.close()
         return
     total_pool = row['prize_pool']
     winner_share = int(total_pool * (1 - HOUSE_COMMISSION))
     cursor.execute("UPDATE users SET balance = balance + ? WHERE telegram_id=?",
                    (winner_share, winner_telegram_id))
-    db.commit()
+    conn.commit()
+    conn.close()
     logger.info(f"Winner {winner_telegram_id} gets {winner_share} from {total_pool}")
 
 def notify_round_end(winner_id):
@@ -313,11 +312,11 @@ threading.Thread(target=round_worker, daemon=True).start()
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-# --- Telegram command handlers (same as before) ---
+# --- Telegram command handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
     cursor.execute("SELECT id, balance, signup_bonus_given FROM users WHERE telegram_id=?", (user_id,))
     user = cursor.fetchone()
@@ -340,17 +339,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             INSERT INTO users (telegram_id, balance, referrer_id, signup_bonus_given)
             VALUES (?, 0, ?, 0)
         ''', (user_id, referrer_id))
-        db.commit()
+        conn.commit()
         cursor.execute("UPDATE users SET balance = balance + 10, signup_bonus_given = 1 WHERE telegram_id=?", (user_id,))
-        db.commit()
+        conn.commit()
         bonus_text = "You received 10 ETB sign-up bonus!"
     else:
         if not user['signup_bonus_given']:
             cursor.execute("UPDATE users SET balance = balance + 10, signup_bonus_given = 1 WHERE telegram_id=?", (user_id,))
-            db.commit()
+            conn.commit()
             bonus_text = "You received 10 ETB sign-up bonus!"
         else:
             bonus_text = ""
+    conn.close()
     
     keyboard = [
         [InlineKeyboardButton(
@@ -393,10 +393,11 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("SELECT balance FROM users WHERE telegram_id=?", (user_id,))
     row = cursor.fetchone()
+    conn.close()
     bal = row['balance'] if row else 0
     await update.message.reply_text(f"Your balance: {bal} ETB")
 
@@ -419,8 +420,8 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if method not in ["telbirr", "cbebirr"]:
             await update.message.reply_text("Method must be 'telbirr' or 'cbebirr'.")
             return
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (telegram_id, balance) VALUES (?, 0)", (user_id,))
     cursor.execute("SELECT id FROM users WHERE telegram_id=?", (user_id,))
     user_db_id = cursor.fetchone()['id']
@@ -428,8 +429,9 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         INSERT INTO deposits (user_id, amount, method, status)
         VALUES (?, ?, ?, 'pending')
     ''', (user_db_id, amount, method))
-    db.commit()
+    conn.commit()
     deposit_id = cursor.lastrowid
+    conn.close()
     number = TELBIRR_NUMBER if method == "telbirr" else CBEBIRR_NUMBER
     await update.message.reply_text(
         f"✅ Deposit request #{deposit_id} created.\n"
@@ -439,8 +441,8 @@ async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def my_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute('''
         SELECT d.id, d.amount, d.method, d.status, d.created_at
         FROM deposits d
@@ -450,6 +452,7 @@ async def my_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LIMIT 10
     ''', (user_id,))
     rows = cursor.fetchall()
+    conn.close()
     if not rows:
         await update.message.reply_text("You have no deposit requests.")
         return
@@ -462,8 +465,8 @@ async def pending_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Admin only.")
         return
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute('''
         SELECT d.id, u.telegram_id, d.amount, d.method, d.created_at
         FROM deposits d
@@ -472,6 +475,7 @@ async def pending_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ORDER BY d.created_at
     ''')
     rows = cursor.fetchall()
+    conn.close()
     if not rows:
         await update.message.reply_text("No pending deposits.")
         return
@@ -490,8 +494,8 @@ async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Usage: /approve <deposit_id>")
         return
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute('''
         SELECT d.id, d.user_id, d.amount, d.status
         FROM deposits d
@@ -499,9 +503,11 @@ async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''', (deposit_id,))
     row = cursor.fetchone()
     if not row:
+        conn.close()
         await update.message.reply_text("Deposit not found.")
         return
     if row['status'] != 'pending':
+        conn.close()
         await update.message.reply_text(f"Deposit already {row['status']}.")
         return
     
@@ -538,10 +544,11 @@ async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 except:
                     pass
-    db.commit()
+    conn.commit()
     
     cursor.execute("SELECT telegram_id FROM users WHERE id=?", (row['user_id'],))
     user_tid = cursor.fetchone()['telegram_id']
+    conn.close()
     try:
         await telegram_app.bot.send_message(
             chat_id=user_tid,
@@ -560,8 +567,8 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Usage: /reject <deposit_id>")
         return
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute('''
         SELECT d.id, d.status, u.telegram_id
         FROM deposits d
@@ -570,16 +577,20 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ''', (deposit_id,))
     row = cursor.fetchone()
     if not row:
+        conn.close()
         await update.message.reply_text("Deposit not found.")
         return
     if row['status'] != 'pending':
+        conn.close()
         await update.message.reply_text(f"Deposit already {row['status']}.")
         return
     cursor.execute("UPDATE deposits SET status='rejected' WHERE id=?", (deposit_id,))
-    db.commit()
+    conn.commit()
+    user_tid = row['telegram_id']
+    conn.close()
     try:
         await telegram_app.bot.send_message(
-            chat_id=row['telegram_id'],
+            chat_id=user_tid,
             text=f"❌ Your deposit #{deposit_id} has been rejected. Please contact admin."
         )
     except:
@@ -588,10 +599,11 @@ async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (telegram_id, balance) VALUES (?, 0)", (user_id,))
-    db.commit()
+    conn.commit()
+    conn.close()
     get_or_create_active_round()
     with round_lock:
         if user_id not in active_round['players']:
@@ -638,7 +650,6 @@ async def round_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Numbers called: {len(active_round['called_numbers'])}"
         )
 
-# Register command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("referral", referral))
 telegram_app.add_handler(CommandHandler("balance", balance))
@@ -652,7 +663,7 @@ telegram_app.add_handler(CommandHandler("start_round", start_round))
 telegram_app.add_handler(CommandHandler("next_round", next_round))
 telegram_app.add_handler(CommandHandler("round_info", round_info))
 
-# --- Flask endpoints (unchanged) ---
+# --- Flask endpoints for WebApp ---
 @app.route("/webapp")
 def webapp():
     return render_template("index.html")
@@ -662,10 +673,11 @@ def get_user_data():
     user_id = request.args.get('user_id')
     if not user_id:
         return jsonify(error="No user id"), 400
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("SELECT balance FROM users WHERE telegram_id=?", (user_id,))
     row = cursor.fetchone()
+    conn.close()
     balance = row['balance'] if row else 0
     with round_lock:
         active_games = len(active_round['player_cards'].get(int(user_id), [])) if active_round['status'] == 'active' else 0
@@ -680,10 +692,11 @@ def get_user_data():
     })
 
 def get_round_prize():
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("SELECT prize_pool FROM rounds WHERE id=?", (active_round['id'],))
     row = cursor.fetchone()
+    conn.close()
     return row['prize_pool'] if row else 0
 
 @app.route("/get_called_numbers")
@@ -703,8 +716,8 @@ def get_my_cards():
         round_id = active_round['id']
         if not round_id:
             return jsonify(cards=[])
-        db = get_db()
-        cursor = db.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute('''
             SELECT c.board, c.id
             FROM cards c
@@ -712,6 +725,7 @@ def get_my_cards():
             WHERE c.round_id = ? AND u.telegram_id = ?
         ''', (round_id, user_id))
         rows = cursor.fetchall()
+        conn.close()
         cards = [{'id': row['id'], 'board': json.loads(row['board'])} for row in rows]
         return jsonify(cards=cards)
 
@@ -724,19 +738,22 @@ def buy_cards():
         return jsonify(success=False, message="Missing data")
     if len(card_ids) > MAX_CARDS_PER_PLAYER:
         return jsonify(success=False, message=f"Max {MAX_CARDS_PER_PLAYER} cards")
-    db = get_db()
-    cursor = db.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("SELECT balance, id FROM users WHERE telegram_id=?", (user_id,))
     user = cursor.fetchone()
     if not user:
+        conn.close()
         return jsonify(success=False, message="User not found")
     balance = user['balance']
     user_db_id = user['id']
     total_cost = len(card_ids) * CARD_COST
     if balance < total_cost:
+        conn.close()
         return jsonify(success=False, message="Insufficient balance")
     with round_lock:
         if active_round['status'] != 'waiting':
+            conn.close()
             return jsonify(success=False, message="Round already started")
         round_id = active_round['id']
         new_card_ids = []
@@ -754,7 +771,8 @@ def buy_cards():
             new_card_ids.append(card_id)
         cursor.execute("UPDATE users SET balance = balance - ? WHERE id=?", (total_cost, user_db_id))
         cursor.execute("UPDATE rounds SET prize_pool = prize_pool + ? WHERE id=?", (total_cost, round_id))
-        db.commit()
+        conn.commit()
+        conn.close()
         if user_id not in active_round['player_cards']:
             active_round['player_cards'][user_id] = []
         active_round['player_cards'][user_id].extend(new_card_ids)
@@ -791,6 +809,6 @@ def start_bot():
 bot_thread = threading.Thread(target=start_bot, daemon=True)
 bot_thread.start()
 
-# --- Run Flask (for Railway, Gunicorn will call this) ---
+# --- Run Flask ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
