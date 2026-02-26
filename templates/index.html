@@ -40,22 +40,31 @@
             </div>
         </div>
 
+        <!-- Round status message -->
+        <div id="round-status-message" style="text-align: center; margin: 10px 0; font-weight: bold;"></div>
+
         <!-- Players Ready (placeholder) -->
         <div class="players-ready">
             <h3>PLAYERS READY</h3>
             <div id="players-list">Loading...</div>
         </div>
 
-        <!-- Choose Cards -->
-        <div class="choose-cards">
+        <!-- My Cards Section -->
+        <div class="my-cards">
+            <h3>Your Cards</h3>
+            <div id="cards-container"></div>
+        </div>
+
+        <!-- Choose Cards (only visible when round is waiting) -->
+        <div class="choose-cards" id="choose-cards-section">
             <h3>Choose Your Cards</h3>
-            <p class="info">{{ CARD_COST }} ETB per card | Max {{ MAX_CARDS }} cards</p>
+            <p class="info">10 ETB per card | Max 20 cards</p>
             <div class="card-selection">
                 <input type="number" id="card-input" placeholder="Enter card number">
                 <button id="add-card">Add</button>
             </div>
             <div class="your-cards">
-                <p>Your Cards ({{ MAX_CARDS }} max):</p>
+                <p>Your Selected Cards (20 max):</p>
                 <ul id="selected-cards-list"></ul>
             </div>
             <div class="total" id="total-cost">Total: 0.00 ETB</div>
