@@ -1,0 +1,157 @@
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #f5f5f5);
+    color: var(--tg-theme-text-color, #000);
+    margin: 0;
+    padding: 12px;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: var(--tg-theme-secondary-bg-color, #fff);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid #ddd;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+.game-title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #d32f2f;
+}
+.game-info {
+    font-size: 14px;
+}
+.admin-badge {
+    background: #ffc107;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 12px;
+}
+.stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.stat-item {
+    background: #e0e0e0;
+    border-radius: 6px;
+    padding: 6px;
+    text-align: center;
+}
+.stat-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #555;
+}
+.stat-value {
+    font-size: 14px;
+    font-weight: bold;
+}
+.players-ready {
+    background: #f0f0f0;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+.players-ready h3 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+}
+.choose-cards {
+    margin-bottom: 16px;
+}
+.choose-cards h3 {
+    margin: 0 0 4px 0;
+}
+.info {
+    font-size: 14px;
+    color: #666;
+    margin: 4px 0;
+}
+.card-selection {
+    display: flex;
+    gap: 8px;
+    margin: 10px 0;
+}
+.card-selection input {
+    flex: 1;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+.card-selection button {
+    padding: 8px 16px;
+    background: var(--tg-theme-button-color, #40a7e3);
+    color: var(--tg-theme-button-text-color, #fff);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.your-cards ul {
+    list-style: none;
+    padding: 0;
+}
+.your-cards li {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px dashed #ccc;
+}
+.your-cards .remove {
+    color: red;
+    cursor: pointer;
+    font-weight: bold;
+}
+.total {
+    text-align: right;
+    font-weight: bold;
+    margin: 8px 0;
+}
+.called-numbers {
+    overflow-x: auto;
+    margin: 16px 0;
+}
+#numbers-grid {
+    width: 100%;
+    border-collapse: collapse;
+}
+#numbers-grid td {
+    border: 1px solid #aaa;
+    padding: 6px;
+    text-align: center;
+    font-size: 14px;
+}
+#numbers-grid td.called {
+    background: #4caf50;
+    color: white;
+}
+.actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+.actions button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+}
+#clear-btn {
+    background: #f44336;
+    color: white;
+}
+#confirm-btn {
+    background: var(--tg-theme-button-color, #40a7e3);
+    color: var(--tg-theme-button-text-color, #fff);
+}
