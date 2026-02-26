@@ -3,7 +3,7 @@ import json
 import asyncio
 import random
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import logging
@@ -25,11 +25,11 @@ try:
         BINGO_CARDS = json.load(f)
         CARDS_BY_ID = {c["id"]: c["card"] for c in BINGO_CARDS}
     logger.info(f"✅ Loaded {len(BINGO_CARDS)} cards")
-except:
-    logger.error("❌ No cards found")
+except Exception as e:
+    logger.error(f"❌ Failed to load cards: {e}")
     CARDS_BY_ID = {}
 
-CARD_PRICE = 1000
+CARD_PRICE = 1000  # 10 ETB in cents
 ADMIN_USER_ID = os.getenv('ADMIN_USER_ID', '')
 
 class GameManager:
@@ -51,7 +51,9 @@ class GameManager:
         
         self.connections[game_id].add(ws)
         
-        user = db.get_user(user_id) or db.get_or_create_user(user_id)
+        user = db.get_user(user_id)
+        if not user:
+            user = db.get_or_create_user(user_id)
         
         await ws.send_json({
             'type': 'connected',
@@ -65,11 +67,11 @@ class GameManager:
         if game_id in self.connections:
             self.connections[game_id].discard(ws)
     
-    async def broadcast(self, game_id: int, msg: dict):
+    async def broadcast(self, game_id: int, message: dict):
         if game_id in self.connections:
-            for conn in self.connections[game_id]:
+            for conn in list(self.connections[game_id]):
                 try:
-                    await conn.send_json(msg)
+                    await conn.send_json(message)
                 except:
                     pass
 
@@ -77,11 +79,13 @@ manager = GameManager()
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "cards": len(CARDS_BY_ID)}
 
 @app.get("/game", response_class=HTMLResponse)
 async def game_page(request: Request, user_id: int, game_id: int = 1):
-    user = db.get_user(user_id) or db.get_or_create_user(user_id)
+    user = db.get_user(user_id)
+    if not user:
+        user = db.get_or_create_user(user_id)
     
     return templates.TemplateResponse("bingo.html", {
         "request": request,
@@ -116,7 +120,6 @@ async def websocket_endpoint(ws: WebSocket, game_id: int, user_id: int):
                     }
                 
                 player = game['players'][user_id]
-                total_cost = len(data['card_ids']) * CARD_PRICE
                 
                 await ws.send_json({'type': 'cards_selected', 'success': True})
                 
@@ -142,12 +145,22 @@ async def websocket_endpoint(ws: WebSocket, game_id: int, user_id: int):
                     if card_count > 0:
                         total_cost = card_count * CARD_PRICE
                         result = db.update_balance(
-                            user_id, -total_cost, 'game_fee', 
+                            user_id, 
+                            -total_cost, 
+                            'game_fee',
                             f'Game {game_id} - {card_count} cards'
                         )
                         
                         if result:
                             player['ready'] = True
+                            
+                            # Save to database
+                            for card in player['cards']:
+                                db.add_player_card(
+                                    game_id, user_id, card['id'], 
+                                    card['data'], CARD_PRICE
+                                )
+                            
                             await manager.broadcast(game_id, {
                                 'type': 'player_ready',
                                 'players': list(game['players'].values())
@@ -161,12 +174,14 @@ async def websocket_endpoint(ws: WebSocket, game_id: int, user_id: int):
                 game['started'] = True
                 game['called'] = []
                 
+                db.start_game(game_id)
+                
                 asyncio.create_task(run_game(game_id))
                 await manager.broadcast(game_id, {'type': 'game_started'})
             
             elif data['type'] == 'ping':
                 await ws.send_json({'type': 'pong'})
-
+    
     except WebSocketDisconnect:
         manager.disconnect(game_id, ws)
 
@@ -183,6 +198,8 @@ async def run_game(game_id: int):
         if available:
             number = random.choice(available)
             game['called'].append(number)
+            
+            db.add_called_number(game_id, number)
             
             await manager.broadcast(game_id, {
                 'type': 'number_called',
@@ -203,17 +220,19 @@ async def run_game(game_id: int):
 def check_bingo(card, called):
     called_set = set(called)
     
+    # Check rows
     for row in range(5):
         if all(card[col][row] == 'FREE' or card[col][row] in called_set for col in range(5)):
             return True
     
+    # Check columns
     for col in range(5):
         if all(card[col][row] == 'FREE' or card[col][row] in called_set for row in range(5)):
             return True
     
+    # Check diagonals
     if all(card[i][i] == 'FREE' or card[i][i] in called_set for i in range(5)):
         return True
-    
     if all(card[i][4-i] == 'FREE' or card[i][4-i] in called_set for i in range(5)):
         return True
     
@@ -226,22 +245,32 @@ async def declare_winner(game_id: int, user_id: int, card_id: int):
     
     # Calculate prize (total stakes * 0.9)
     total_stake = 0
-    for p in game['players'].values():
-        if p.get('ready'):
-            total_stake += len(p['cards']) * CARD_PRICE
+    ready_count = 0
+    
+    for player in game['players'].values():
+        if player.get('ready'):
+            ready_count += 1
+            total_stake += len(player['cards']) * CARD_PRICE
     
     prize = int(total_stake * 0.9)
     
     # Add to winner's balance
     db.update_balance(user_id, prize, 'game_win', f'Won game {game_id}')
     
-    # Get winner name
+    # End game in database
+    db.end_game(game_id, user_id, card_id, prize)
+    
+    # Get winner info
     user = db.get_user(user_id)
-    name = user.get('first_name', f'User{user_id}') if user else f'User{user_id}'
+    winner_name = user.get('first_name', f'User{user_id}') if user else f'User{user_id}'
     
     await manager.broadcast(game_id, {
         'type': 'game_won',
-        'winner': {'name': name, 'card_id': card_id, 'prize': prize / 100}
+        'winner': {
+            'name': winner_name,
+            'card_id': card_id,
+            'prize': prize / 100
+        }
     })
 
 if __name__ == "__main__":
