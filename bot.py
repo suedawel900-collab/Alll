@@ -648,7 +648,7 @@ telegram_app.add_handler(CommandHandler("start_round", start_round))
 telegram_app.add_handler(CommandHandler("next_round", next_round))
 telegram_app.add_handler(CommandHandler("round_info", round_info))
 
-# --- Flask endpoints (unchanged from previous version) ---
+# --- Flask endpoints for WebApp ---
 @app.route("/webapp")
 def webapp():
     return render_template("index.html")
@@ -689,6 +689,27 @@ def get_called_numbers():
             'called': list(active_round['called_numbers']),
             'status': active_round['status']
         })
+
+@app.route("/get_my_cards")
+def get_my_cards():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify(error="No user id"), 400
+    with round_lock:
+        round_id = active_round['id']
+        if not round_id:
+            return jsonify(cards=[])
+        db = get_db()
+        cursor = db.cursor()
+        cursor.execute('''
+            SELECT c.board, c.id
+            FROM cards c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.round_id = ? AND u.telegram_id = ?
+        ''', (round_id, user_id))
+        rows = cursor.fetchall()
+        cards = [{'id': row['id'], 'board': json.loads(row['board'])} for row in rows]
+        return jsonify(cards=cards)
 
 @app.route("/buy_cards", methods=["POST"])
 def buy_cards():
