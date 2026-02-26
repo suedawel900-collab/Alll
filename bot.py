@@ -15,17 +15,22 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("No BOT_TOKEN environment variable set")
 
+ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "").split(",") if id.strip()]
+
 PUBLIC_URL = os.environ.get("RAILWAY_STATIC_URL")
 if not PUBLIC_URL:
-    PUBLIC_URL = "https://your-ngrok-url.ngrok.io"  # for local testing
+    PUBLIC_URL = "https://your-ngrok-url.ngrok.io"
 
 WEBAPP_URL = f"{PUBLIC_URL}/webapp"
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{PUBLIC_URL}{WEBHOOK_PATH"
+WEBHOOK_URL = f"{PUBLIC_URL}{WEBHOOK_PATH}"
 
-CARD_COST = 10          # ETB per card
+CARD_COST = 10
 MAX_CARDS_PER_PLAYER = 20
-HOUSE_COMMISSION = 0.2  # 20%
+HOUSE_COMMISSION = 0.2
+
+TELBIRR_NUMBER = "0953933030"
+CBEBIRR_NUMBER = "0953933030"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -33,13 +38,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask app ---
 app = Flask(__name__)
-
-# --- Telegram application ---
 telegram_app = Application.builder().token(BOT_TOKEN).updater(None).build()
 
-# --- Database helpers ---
 DATABASE = 'bingo.db'
 
 def get_db():
@@ -59,38 +60,37 @@ def init_db():
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
-        # Users
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER UNIQUE,
                 balance INTEGER DEFAULT 0,
+                referrer_id INTEGER,
+                referral_bonus_given BOOLEAN DEFAULT 0,
+                signup_bonus_given BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        # Rounds
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS rounds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT DEFAULT 'waiting',  -- waiting, active, finished
+                status TEXT DEFAULT 'waiting',
                 start_time TIMESTAMP,
                 end_time TIMESTAMP,
                 prize_pool INTEGER DEFAULT 0
             )
         ''')
-        # Cards – each card is a separate Bingo board owned by a player in a round
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 round_id INTEGER,
                 user_id INTEGER,
-                board TEXT,  -- JSON array
+                board TEXT,
                 bingo_claimed BOOLEAN DEFAULT 0,
                 FOREIGN KEY(round_id) REFERENCES rounds(id),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
-        # Called numbers
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS called_numbers (
                 round_id INTEGER,
@@ -99,11 +99,21 @@ def init_db():
                 FOREIGN KEY(round_id) REFERENCES rounds(id)
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS deposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount INTEGER,
+                method TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        ''')
         db.commit()
 
 init_db()
 
-# --- Bingo board generation (5x5 with FREE center) ---
 def generate_board():
     col_ranges = [(1,15), (16,30), (31,45), (46,60), (61,75)]
     cols = []
@@ -131,18 +141,16 @@ def generate_unique_boards(count):
             result.append(board)
     return result
 
-# Pre-generate 1000 unique boards
 logger.info("Generating 1000 unique Bingo boards...")
 BOARD_POOL = generate_unique_boards(1000)
 BOARD_LOCK = threading.Lock()
 logger.info(f"Generated {len(BOARD_POOL)} unique boards.")
 
-# --- Round state (in-memory for speed) ---
 active_round = {
     'id': None,
-    'status': 'waiting',      # waiting, active, finished
-    'players': [],            # list of telegram_ids (unique players)
-    'player_cards': {},       # telegram_id -> list of card_ids
+    'status': 'waiting',
+    'players': [],
+    'player_cards': {},
     'called_numbers': set(),
     'last_call_time': 0,
     'winner_id': None
@@ -150,7 +158,6 @@ active_round = {
 round_lock = threading.Lock()
 
 def get_or_create_active_round():
-    """Ensure a waiting round exists in DB and memory."""
     with round_lock:
         db = get_db()
         cursor = db.cursor()
@@ -162,10 +169,6 @@ def get_or_create_active_round():
             cursor.execute("INSERT INTO rounds (status) VALUES ('waiting')")
             db.commit()
             round_id = cursor.lastrowid
-        # Load existing data into memory
-        active_round['id'] = round_id
-        active_round['status'] = 'waiting'
-        # Get players and their cards
         cursor.execute('''
             SELECT u.telegram_id, c.id as card_id, c.board
             FROM cards c
@@ -179,6 +182,8 @@ def get_or_create_active_round():
             if tid not in players:
                 players[tid] = []
             players[tid].append(row['card_id'])
+        active_round['id'] = round_id
+        active_round['status'] = 'waiting'
         active_round['players'] = list(players.keys())
         active_round['player_cards'] = players
         active_round['called_numbers'] = set()
@@ -186,8 +191,7 @@ def get_or_create_active_round():
         active_round['winner_id'] = None
         return round_id
 
-def reset_round():
-    """Mark current round as finished and create a new waiting round."""
+def reset_round(keep_players=False):
     with round_lock:
         if active_round['id']:
             db = get_db()
@@ -195,7 +199,7 @@ def reset_round():
             cursor.execute("UPDATE rounds SET status='finished', end_time=? WHERE id=?",
                            (datetime.now(), active_round['id']))
             db.commit()
-        # Clear memory
+        old_players = active_round['players'][:] if keep_players else []
         active_round['id'] = None
         active_round['status'] = 'waiting'
         active_round['players'] = []
@@ -203,10 +207,14 @@ def reset_round():
         active_round['called_numbers'] = set()
         active_round['last_call_time'] = 0
         active_round['winner_id'] = None
-        # Create new round
-        get_or_create_active_round()
+        new_round_id = get_or_create_active_round()
+        if keep_players:
+            for tid in old_players:
+                if tid not in active_round['players']:
+                    active_round['players'].append(tid)
+                    active_round['player_cards'][tid] = []
+        return new_round_id
 
-# --- Background round worker (calls numbers every 3 seconds) ---
 def round_worker():
     while True:
         time.sleep(2)
@@ -217,8 +225,7 @@ def round_worker():
             if now - active_round['last_call_time'] >= 3.0:
                 available = set(range(1, 76)) - active_round['called_numbers']
                 if not available:
-                    # No numbers left – rare, but reset
-                    reset_round()
+                    reset_round(keep_players=False)
                     continue
                 number = random.choice(list(available))
                 active_round['called_numbers'].add(number)
@@ -231,19 +238,16 @@ def round_worker():
                 db.commit()
                 logger.info(f"Round {active_round['id']} called {number}")
 
-                # Check for winners among all cards
                 for tid in active_round['players']:
                     if check_any_bingo(tid):
-                        # Player wins
                         active_round['winner_id'] = tid
                         active_round['status'] = 'finished'
                         distribute_prize(tid)
                         notify_round_end(tid)
-                        reset_round()
+                        reset_round(keep_players=True)
                         break
 
 def check_any_bingo(telegram_id):
-    """Return True if any card of this player has a Bingo."""
     db = get_db()
     cursor = db.cursor()
     cursor.execute('''
@@ -259,22 +263,18 @@ def check_any_bingo(telegram_id):
     return False
 
 def check_bingo_board(board, called_numbers):
-    """Check if a single board has Bingo."""
     marked = [[False]*5 for _ in range(5)]
     for r in range(5):
         for c in range(5):
             cell = board[r][c]
             if cell == "FREE" or cell in called_numbers:
                 marked[r][c] = True
-    # Rows
     for r in range(5):
         if all(marked[r][c] for c in range(5)):
             return True
-    # Columns
     for c in range(5):
         if all(marked[r][c] for r in range(5)):
             return True
-    # Diagonals
     if all(marked[i][i] for i in range(5)):
         return True
     if all(marked[i][4-i] for i in range(5)):
@@ -300,16 +300,55 @@ def notify_round_end(winner_id):
         try:
             telegram_app.bot.send_message(
                 chat_id=pid,
-                text=f"🎉 Bingo! Player {winner_id} won the round! Prize distributed."
+                text=f"🎉 Bingo! Player {winner_id} won the round! Get ready for the next round."
             )
         except:
             pass
 
-# Start worker thread
 threading.Thread(target=round_worker, daemon=True).start()
+
+def is_admin(user_id):
+    return user_id in ADMIN_IDS
 
 # --- Telegram command handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute("SELECT id, balance, signup_bonus_given FROM users WHERE telegram_id=?", (user_id,))
+    user = cursor.fetchone()
+    
+    referrer_id = None
+    if context.args:
+        try:
+            referrer_id = int(context.args[0])
+            if referrer_id == user_id:
+                referrer_id = None
+            else:
+                cursor.execute("SELECT id FROM users WHERE telegram_id=?", (referrer_id,))
+                if not cursor.fetchone():
+                    referrer_id = None
+        except:
+            referrer_id = None
+    
+    if not user:
+        cursor.execute('''
+            INSERT INTO users (telegram_id, balance, referrer_id, signup_bonus_given)
+            VALUES (?, 0, ?, 0)
+        ''', (user_id, referrer_id))
+        db.commit()
+        cursor.execute("UPDATE users SET balance = balance + 10, signup_bonus_given = 1 WHERE telegram_id=?", (user_id,))
+        db.commit()
+        bonus_text = "You received 10 ETB sign-up bonus!"
+    else:
+        if not user['signup_bonus_given']:
+            cursor.execute("UPDATE users SET balance = balance + 10, signup_bonus_given = 1 WHERE telegram_id=?", (user_id,))
+            db.commit()
+            bonus_text = "You received 10 ETB sign-up bonus!"
+        else:
+            bonus_text = ""
+    
     keyboard = [
         [InlineKeyboardButton(
             text="🎰 Open Bingo Game",
@@ -317,12 +356,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
+    
+    msg = (
         "Welcome to Bingo Bot!\n"
         f"• Each card costs {CARD_COST} ETB.\n"
         f"• Max {MAX_CARDS_PER_PLAYER} cards per round.\n"
-        "Use /balance, /deposit <amount>, /join to enter a round.",
-        reply_markup=reply_markup
+        f"• Invite friends and earn 5% of their first deposit!\n"
+        f"{bonus_text}\n\n"
+        "Commands:\n"
+        "/balance - Check your balance\n"
+        "/deposit <amount> [method] - Request deposit (method: telbirr or cbebirr)\n"
+        "/mydeposits - View your pending deposits\n"
+        "/join - Join the current round\n"
+        "/round_info - Current round status\n"
+        "/referral - Get your referral link\n\n"
+        "Admin commands:\n"
+        "/pending_deposits - List pending deposits\n"
+        "/approve <deposit_id> - Approve deposit\n"
+        "/reject <deposit_id> - Reject deposit\n"
+        "/start_round - Start the round (admin)\n"
+        "/next_round - Reset round for next game (keeps players)"
+    )
+    await update.message.reply_text(msg, reply_markup=reply_markup)
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot_username = (await context.bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start={user_id}"
+    await update.message.reply_text(
+        f"Your referral link:\n{link}\n\n"
+        "Share it with friends. You'll get 5% of their first deposit!"
     )
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -335,40 +398,208 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Your balance: {bal} ETB")
 
 async def deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        amount = int(context.args[0])
-    except:
-        await update.message.reply_text("Usage: /deposit <amount>")
-        return
     user_id = update.effective_user.id
+    args = context.args
+    if len(args) < 1:
+        await update.message.reply_text("Usage: /deposit <amount> [method] (method: telbirr or cbebirr)")
+        return
+    try:
+        amount = int(args[0])
+        if amount <= 0:
+            raise ValueError
+    except:
+        await update.message.reply_text("Amount must be a positive integer.")
+        return
+    method = "telbirr"
+    if len(args) >= 2:
+        method = args[1].lower()
+        if method not in ["telbirr", "cbebirr"]:
+            await update.message.reply_text("Method must be 'telbirr' or 'cbebirr'.")
+            return
     db = get_db()
     cursor = db.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (telegram_id, balance) VALUES (?, 0)", (user_id,))
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE telegram_id=?", (amount, user_id))
+    cursor.execute("SELECT id FROM users WHERE telegram_id=?", (user_id,))
+    user_db_id = cursor.fetchone()['id']
+    cursor.execute('''
+        INSERT INTO deposits (user_id, amount, method, status)
+        VALUES (?, ?, ?, 'pending')
+    ''', (user_db_id, amount, method))
     db.commit()
-    new_bal = get_balance(user_id)
-    await update.message.reply_text(f"Added {amount} ETB. New balance: {new_bal} ETB")
+    deposit_id = cursor.lastrowid
+    number = TELBIRR_NUMBER if method == "telbirr" else CBEBIRR_NUMBER
+    await update.message.reply_text(
+        f"✅ Deposit request #{deposit_id} created.\n"
+        f"Please send {amount} ETB to {method.upper()} number {number}.\n"
+        f"Then wait for admin approval. Use /mydeposits to check status."
+    )
 
-def get_balance(user_id):
+async def my_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     db = get_db()
     cursor = db.cursor()
-    cursor.execute("SELECT balance FROM users WHERE telegram_id=?", (user_id,))
+    cursor.execute('''
+        SELECT d.id, d.amount, d.method, d.status, d.created_at
+        FROM deposits d
+        JOIN users u ON d.user_id = u.id
+        WHERE u.telegram_id = ?
+        ORDER BY d.created_at DESC
+        LIMIT 10
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    if not rows:
+        await update.message.reply_text("You have no deposit requests.")
+        return
+    msg = "Your recent deposits:\n"
+    for r in rows:
+        msg += f"#{r['id']}: {r['amount']} ETB via {r['method']} - {r['status']}\n"
+    await update.message.reply_text(msg)
+
+async def pending_deposits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT d.id, u.telegram_id, d.amount, d.method, d.created_at
+        FROM deposits d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.status = 'pending'
+        ORDER BY d.created_at
+    ''')
+    rows = cursor.fetchall()
+    if not rows:
+        await update.message.reply_text("No pending deposits.")
+        return
+    msg = "Pending deposits:\n"
+    for r in rows:
+        msg += f"#{r['id']} | User {r['telegram_id']} | {r['amount']} ETB | {r['method']} | {r['created_at']}\n"
+    msg += "\nUse /approve <id> or /reject <id>"
+    await update.message.reply_text(msg)
+
+async def approve_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
+    try:
+        deposit_id = int(context.args[0])
+    except:
+        await update.message.reply_text("Usage: /approve <deposit_id>")
+        return
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT d.id, d.user_id, d.amount, d.status
+        FROM deposits d
+        WHERE d.id = ?
+    ''', (deposit_id,))
     row = cursor.fetchone()
-    return row['balance'] if row else 0
+    if not row:
+        await update.message.reply_text("Deposit not found.")
+        return
+    if row['status'] != 'pending':
+        await update.message.reply_text(f"Deposit already {row['status']}.")
+        return
+    
+    cursor.execute("UPDATE deposits SET status='approved' WHERE id=?", (deposit_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id=?", (row['amount'], row['user_id']))
+    
+    # Check if this is the user's first approved deposit
+    cursor.execute('''
+        SELECT COUNT(*) as cnt FROM deposits
+        WHERE user_id = ? AND status='approved'
+    ''', (row['user_id'],))
+    count = cursor.fetchone()['cnt']
+    if count == 1:
+        cursor.execute('''
+            SELECT u.referrer_id, u.referral_bonus_given
+            FROM users u
+            WHERE u.id = ?
+        ''', (row['user_id'],))
+        user = cursor.fetchone()
+        if user and user['referrer_id'] and not user['referral_bonus_given']:
+            referrer_tid = user['referrer_id']
+            bonus = int(row['amount'] * 0.05)
+            if bonus > 0:
+                cursor.execute('''
+                    UPDATE users SET balance = balance + ? WHERE telegram_id = ?
+                ''', (bonus, referrer_tid))
+                cursor.execute('''
+                    UPDATE users SET referral_bonus_given = 1 WHERE id = ?
+                ''', (row['user_id'],))
+                try:
+                    await telegram_app.bot.send_message(
+                        chat_id=referrer_tid,
+                        text=f"🎉 You earned {bonus} ETB referral bonus from a friend's first deposit!"
+                    )
+                except:
+                    pass
+    db.commit()
+    
+    cursor.execute("SELECT telegram_id FROM users WHERE id=?", (row['user_id'],))
+    user_tid = cursor.fetchone()['telegram_id']
+    try:
+        await telegram_app.bot.send_message(
+            chat_id=user_tid,
+            text=f"✅ Your deposit of {row['amount']} ETB has been approved. Balance updated."
+        )
+    except:
+        pass
+    await update.message.reply_text(f"Deposit #{deposit_id} approved.")
+
+async def reject_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
+    try:
+        deposit_id = int(context.args[0])
+    except:
+        await update.message.reply_text("Usage: /reject <deposit_id>")
+        return
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT d.id, d.status, u.telegram_id
+        FROM deposits d
+        JOIN users u ON d.user_id = u.id
+        WHERE d.id = ?
+    ''', (deposit_id,))
+    row = cursor.fetchone()
+    if not row:
+        await update.message.reply_text("Deposit not found.")
+        return
+    if row['status'] != 'pending':
+        await update.message.reply_text(f"Deposit already {row['status']}.")
+        return
+    cursor.execute("UPDATE deposits SET status='rejected' WHERE id=?", (deposit_id,))
+    db.commit()
+    try:
+        await telegram_app.bot.send_message(
+            chat_id=row['telegram_id'],
+            text=f"❌ Your deposit #{deposit_id} has been rejected. Please contact admin."
+        )
+    except:
+        pass
+    await update.message.reply_text(f"Deposit #{deposit_id} rejected.")
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allows user to join the current round (just registers them, cards selected in WebApp)."""
     user_id = update.effective_user.id
     db = get_db()
     cursor = db.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (telegram_id, balance) VALUES (?, 0)", (user_id,))
     db.commit()
-    # Ensure round exists
     get_or_create_active_round()
-    await update.message.reply_text("You can now open the WebApp and select your cards.")
+    with round_lock:
+        if user_id not in active_round['players']:
+            active_round['players'].append(user_id)
+            active_round['player_cards'][user_id] = []
+    await update.message.reply_text("You joined the round! Open the WebApp to select your cards.")
 
 async def start_round(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to start the round."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
     with round_lock:
         if active_round['status'] != 'waiting':
             await update.message.reply_text("Round already active or finished.")
@@ -378,7 +609,6 @@ async def start_round(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         active_round['status'] = 'active'
         active_round['last_call_time'] = time.time()
-        # Notify players
         for pid in active_round['players']:
             try:
                 await telegram_app.bot.send_message(
@@ -389,6 +619,14 @@ async def start_round(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         await update.message.reply_text("Round started!")
 
+async def next_round(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Admin only.")
+        return
+    with round_lock:
+        reset_round(keep_players=True)
+    await update.message.reply_text("Next round is ready. Players can now buy new cards.")
+
 async def round_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with round_lock:
         await update.message.reply_text(
@@ -398,22 +636,25 @@ async def round_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("referral", referral))
 telegram_app.add_handler(CommandHandler("balance", balance))
 telegram_app.add_handler(CommandHandler("deposit", deposit))
+telegram_app.add_handler(CommandHandler("mydeposits", my_deposits))
+telegram_app.add_handler(CommandHandler("pending_deposits", pending_deposits))
+telegram_app.add_handler(CommandHandler("approve", approve_deposit))
+telegram_app.add_handler(CommandHandler("reject", reject_deposit))
 telegram_app.add_handler(CommandHandler("join", join))
 telegram_app.add_handler(CommandHandler("start_round", start_round))
+telegram_app.add_handler(CommandHandler("next_round", next_round))
 telegram_app.add_handler(CommandHandler("round_info", round_info))
 
-# --- Flask endpoints for WebApp ---
+# --- Flask endpoints (unchanged from previous version) ---
 @app.route("/webapp")
 def webapp():
     return render_template("index.html")
 
 @app.route("/get_user_data")
 def get_user_data():
-    """Return user info: balance, active games, etc. Expects tgWebAppData with user id."""
-    # In production, parse Telegram.WebApp.initData to get user id.
-    # For simplicity, we'll use a query parameter for testing.
     user_id = request.args.get('user_id')
     if not user_id:
         return jsonify(error="No user id"), 400
@@ -422,15 +663,16 @@ def get_user_data():
     cursor.execute("SELECT balance FROM users WHERE telegram_id=?", (user_id,))
     row = cursor.fetchone()
     balance = row['balance'] if row else 0
-    # Count active games (cards in current round)
     with round_lock:
         active_games = len(active_round['player_cards'].get(int(user_id), [])) if active_round['status'] == 'active' else 0
+        round_status = active_round['status']
     return jsonify({
         'balance': balance,
         'active_games': active_games,
         'round_prize': get_round_prize(),
         'round_number': active_round['id'] if active_round['id'] else 0,
-        'stake': 0  # will be updated as cards are selected
+        'stake': 0,
+        'round_status': round_status
     })
 
 def get_round_prize():
@@ -450,17 +692,15 @@ def get_called_numbers():
 
 @app.route("/buy_cards", methods=["POST"])
 def buy_cards():
-    """User confirms purchase of selected card IDs."""
     data = request.get_json()
     user_id = data.get('user_id')
-    card_ids = data.get('card_ids', [])  # list of card IDs they want to buy
+    card_ids = data.get('card_ids', [])
     if not user_id or not card_ids:
         return jsonify(success=False, message="Missing data")
     if len(card_ids) > MAX_CARDS_PER_PLAYER:
         return jsonify(success=False, message=f"Max {MAX_CARDS_PER_PLAYER} cards")
     db = get_db()
     cursor = db.cursor()
-    # Check balance
     cursor.execute("SELECT balance, id FROM users WHERE telegram_id=?", (user_id,))
     user = cursor.fetchone()
     if not user:
@@ -470,15 +710,10 @@ def buy_cards():
     total_cost = len(card_ids) * CARD_COST
     if balance < total_cost:
         return jsonify(success=False, message="Insufficient balance")
-    # Ensure round is waiting
     with round_lock:
         if active_round['status'] != 'waiting':
             return jsonify(success=False, message="Round already started")
         round_id = active_round['id']
-        # Check that card_ids are available (not already bought in this round)
-        # For simplicity, we'll generate new cards on the fly.
-        # In a real system, you'd have a pool of pre-generated card IDs.
-        # Here we'll create new cards and return their IDs.
         new_card_ids = []
         for _ in card_ids:
             with BOARD_LOCK:
@@ -492,12 +727,9 @@ def buy_cards():
             ''', (round_id, user_db_id, json.dumps(board)))
             card_id = cursor.lastrowid
             new_card_ids.append(card_id)
-        # Deduct balance
         cursor.execute("UPDATE users SET balance = balance - ? WHERE id=?", (total_cost, user_db_id))
-        # Update round prize pool
         cursor.execute("UPDATE rounds SET prize_pool = prize_pool + ? WHERE id=?", (total_cost, round_id))
         db.commit()
-        # Update in-memory state
         if user_id not in active_round['player_cards']:
             active_round['player_cards'][user_id] = []
         active_round['player_cards'][user_id].extend(new_card_ids)
@@ -517,12 +749,11 @@ def claim_bingo():
         if user_id not in active_round['players']:
             return jsonify(success=False, message="You are not in this round")
         if check_any_bingo(user_id):
-            # Winner!
             active_round['winner_id'] = user_id
             active_round['status'] = 'finished'
             distribute_prize(user_id)
             notify_round_end(user_id)
-            reset_round()
+            reset_round(keep_players=True)
             return jsonify(success=True, message="Bingo! You win!")
         else:
             return jsonify(success=False, message="No Bingo on your cards")
