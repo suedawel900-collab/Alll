@@ -3,7 +3,7 @@ import random
 import os
 
 def generate_bingo_cards(count=1000):
-    """Generate unique bingo cards like in the images"""
+    """Generate unique bingo cards"""
     cards = []
     
     for card_id in range(1, count + 1):
@@ -29,24 +29,13 @@ def generate_bingo_cards(count=1000):
             "card": card
         })
     
-    return cards
-
-if __name__ == "__main__":
-    os.makedirs("static", exist_ok=True)
-    
-    # Generate cards
-    cards = generate_bingo_cards(1000)
-    
     # Save to file
+    os.makedirs("static", exist_ok=True)
     with open("static/bingo_cards.json", "w", encoding="utf-8") as f:
         json.dump(cards, f, indent=2)
     
     print(f"✅ Generated {len(cards)} bingo cards")
-    print("📁 Saved to static/bingo_cards.json")
-    
-    # Show sample
-    sample = cards[0]
-    print(f"\nSample Card #{sample['id']}:")
-    for row in range(5):
-        row_vals = [str(sample['card'][col][row]).rjust(3) for col in range(5)]
-        print("  " + " | ".join(row_vals))
+    return cards
+
+if __name__ == "__main__":
+    generate_bingo_cards(1000)
