@@ -24,7 +24,7 @@ class Database:
     def _initialize(self):
         self.db_path = 'bingo.db'
         self._create_tables()
-        self._insert_default_payment_methods()
+        self._insert_payment_methods()
         logger.info("✅ Database initialized")
     
     @contextmanager
@@ -61,11 +61,9 @@ class Database:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS games (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    round_number INTEGER DEFAULT 1,
                     status TEXT DEFAULT 'waiting',
                     started_at TIMESTAMP,
                     ended_at TIMESTAMP,
-                    prize_pool INTEGER DEFAULT 0,
                     winner_id INTEGER,
                     winner_card_id INTEGER,
                     winning_amount INTEGER DEFAULT 0,
@@ -81,7 +79,6 @@ class Database:
                     user_id INTEGER NOT NULL,
                     card_id INTEGER NOT NULL,
                     card_data TEXT NOT NULL,
-                    marked_numbers TEXT DEFAULT '[]',
                     stake INTEGER NOT NULL,
                     is_winner BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -109,7 +106,6 @@ class Database:
                     amount INTEGER NOT NULL,
                     type TEXT NOT NULL,
                     description TEXT,
-                    status TEXT DEFAULT 'completed',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
@@ -122,9 +118,6 @@ class Database:
                     name TEXT NOT NULL,
                     code TEXT UNIQUE NOT NULL,
                     account_number TEXT NOT NULL,
-                    min_amount INTEGER DEFAULT 1000,
-                    max_amount INTEGER DEFAULT 500000,
-                    is_active BOOLEAN DEFAULT TRUE,
                     instructions TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -141,7 +134,6 @@ class Database:
                     status TEXT DEFAULT 'pending',
                     sender_phone TEXT,
                     transaction_reference TEXT,
-                    admin_notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     completed_at TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(user_id),
@@ -149,28 +141,9 @@ class Database:
                 )
             ''')
             
-            # Withdrawal requests table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS withdrawal_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    request_id TEXT UNIQUE NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    method_id INTEGER NOT NULL,
-                    amount INTEGER NOT NULL,
-                    account_number TEXT NOT NULL,
-                    account_name TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    admin_notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    processed_at TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id),
-                    FOREIGN KEY (method_id) REFERENCES payment_methods(id)
-                )
-            ''')
-            
             conn.commit()
     
-    def _insert_default_payment_methods(self):
+    def _insert_payment_methods(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -180,26 +153,24 @@ class Database:
             
             # Telbirr
             cursor.execute('''
-                INSERT INTO payment_methods 
-                (name, code, account_number, instructions)
+                INSERT INTO payment_methods (name, code, account_number, instructions)
                 VALUES (?, ?, ?, ?)
             ''', (
                 'ቴሌቢር (Telbirr)',
                 'TELBIRR',
                 '0953933030',
-                '🔵 ቴሌቢር ክፍያ: *127# ይደውሉ → ገንዘብ ላክ → 0953933030'
+                '🔵 ቴሌቢር ክፍያ:\n1. ወደ *127# ይደውሉ\n2. ገንዘብ ላክ ይምረጡ\n3. ቁጥር 0953933030 ያስገቡ\n4. መጠኑን ያስገቡ\n5. ፒንዎን ያስገቡ'
             ))
             
             # CBE Birr
             cursor.execute('''
-                INSERT INTO payment_methods 
-                (name, code, account_number, instructions)
+                INSERT INTO payment_methods (name, code, account_number, instructions)
                 VALUES (?, ?, ?, ?)
             ''', (
                 'ሲቢኢ ቢር (CBE Birr)',
                 'CBEBIRR',
                 '0953933030',
-                '💚 ሲቢኢ ቢር ክፍያ: *847# ይደውሉ → ገንዘብ ላክ → 0953933030'
+                '💚 ሲቢኢ ቢር ክፍያ:\n1. ወደ *847# ይደውሉ\n2. ገንዘብ ላክ ይምረጡ\n3. ቁጥር 0953933030 ያስገቡ\n4. መጠኑን ያስገቡ\n5. ፒንዎን ያስገቡ'
             ))
             
             conn.commit()
@@ -241,7 +212,6 @@ class Database:
             new_balance = user['balance'] + amount
             
             cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_balance, user_id))
-            
             cursor.execute('''
                 INSERT INTO transactions (user_id, amount, type, description)
                 VALUES (?, ?, ?, ?)
@@ -251,13 +221,68 @@ class Database:
                 cursor.execute('UPDATE users SET games_won = games_won + 1 WHERE user_id = ?', (user_id,))
             
             conn.commit()
-            
             return {'new_balance': new_balance}
+    
+    def create_game(self):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO games (status) VALUES (?)', ('waiting',))
+            conn.commit()
+            return cursor.lastrowid
+    
+    def get_active_game(self):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM games WHERE status = "waiting" ORDER BY created_at DESC LIMIT 1')
+            game = cursor.fetchone()
+            return dict(game) if game else None
+    
+    def add_player_card(self, game_id, user_id, card_id, card_data, stake):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO player_cards (game_id, user_id, card_id, card_data, stake)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (game_id, user_id, card_id, json.dumps(card_data), stake))
+            conn.commit()
+            return cursor.lastrowid
+    
+    def start_game(self, game_id):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE games SET status = "active", started_at = CURRENT_TIMESTAMP WHERE id = ?', (game_id,))
+            conn.commit()
+    
+    def end_game(self, game_id, winner_id, winner_card_id, amount):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE games 
+                SET status = "ended", 
+                    ended_at = CURRENT_TIMESTAMP,
+                    winner_id = ?,
+                    winner_card_id = ?,
+                    winning_amount = ?
+                WHERE id = ?
+            ''', (winner_id, winner_card_id, amount, game_id))
+            conn.commit()
+    
+    def add_called_number(self, game_id, number):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO called_numbers (game_id, number) VALUES (?, ?)', (game_id, number))
+            conn.commit()
+    
+    def get_called_numbers(self, game_id):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT number FROM called_numbers WHERE game_id = ? ORDER BY called_at', (game_id,))
+            return [row['number'] for row in cursor.fetchall()]
     
     def get_payment_methods(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM payment_methods WHERE is_active = 1')
+            cursor.execute('SELECT * FROM payment_methods')
             return [dict(row) for row in cursor.fetchall()]
     
     def get_payment_method(self, method_id):
@@ -277,29 +302,3 @@ class Database:
             ''', (request_id, user_id, method_id, amount, sender_phone))
             conn.commit()
             return request_id
-    
-    def approve_payment(self, request_id):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT * FROM payment_requests WHERE request_id = ?', (request_id,))
-            request = cursor.fetchone()
-            if not request:
-                return False
-            
-            cursor.execute('''
-                UPDATE payment_requests 
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-                WHERE request_id = ?
-            ''', (request_id,))
-            
-            cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', 
-                         (request['amount'], request['user_id']))
-            
-            cursor.execute('''
-                INSERT INTO transactions (user_id, amount, type, description)
-                VALUES (?, ?, ?, ?)
-            ''', (request['user_id'], request['amount'], 'deposit', f'Payment {request_id}'))
-            
-            conn.commit()
-            return True
