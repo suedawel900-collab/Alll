@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bingo Game</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="game-title">BINGO</div>
+            <div class="game-info">Game #1 | Player: <span id="player-id"></span></div>
+            <div class="admin-badge">ADMIN</div>
+        </div>
+
+        <!-- Stats row -->
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-label">WALLET</div>
+                <div class="stat-value" id="wallet">0.00 ETB</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">ACTIVE GAMES</div>
+                <div class="stat-value" id="active-games">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">STAKE</div>
+                <div class="stat-value" id="stake">0.00 ETB</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">ACTIVE GAME</div>
+                <div class="stat-value" id="active-game">Round 0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">ROUND PRIZE</div>
+                <div class="stat-value" id="round-prize">0.00 ETB</div>
+            </div>
+        </div>
+
+        <!-- Players Ready (placeholder) -->
+        <div class="players-ready">
+            <h3>PLAYERS READY</h3>
+            <div id="players-list">Loading...</div>
+        </div>
+
+        <!-- Choose Cards -->
+        <div class="choose-cards">
+            <h3>Choose Your Cards</h3>
+            <p class="info">{{ CARD_COST }} ETB per card | Max {{ MAX_CARDS }} cards</p>
+            <div class="card-selection">
+                <input type="number" id="card-input" placeholder="Enter card number">
+                <button id="add-card">Add</button>
+            </div>
+            <div class="your-cards">
+                <p>Your Cards ({{ MAX_CARDS }} max):</p>
+                <ul id="selected-cards-list"></ul>
+            </div>
+            <div class="total" id="total-cost">Total: 0.00 ETB</div>
+        </div>
+
+        <!-- Called Numbers Grid (5x15 for 1-75) -->
+        <div class="called-numbers">
+            <table id="numbers-grid">
+                <!-- Filled by JS -->
+            </table>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="actions">
+            <button id="clear-btn">Clear</button>
+            <button id="confirm-btn">Confirm (0.00 ETB)</button>
+        </div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
