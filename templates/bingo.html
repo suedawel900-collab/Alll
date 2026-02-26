@@ -4,43 +4,227 @@
     <title>Bingo Game</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Arial; background: linear-gradient(135deg, #667eea, #764ba2); margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 10px; }
-        .container { max-width: 600px; width: 100%; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
-        .header { background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 20px; text-align: center; }
-        .balance { background: #2c3e50; color: white; padding: 10px; text-align: center; font-size: 18px; }
-        .status { display: inline-block; padding: 5px 15px; border-radius: 20px; margin: 10px; font-weight: bold; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 5px; }
+        .balance {
+            background: #2c3e50;
+            color: white;
+            padding: 10px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin-top: 10px;
+            font-weight: bold;
+        }
         .waiting { background: #ff9800; color: white; }
         .playing { background: #4CAF50; color: white; }
         .winner { background: #9c27b0; color: white; }
+        
         .selection { padding: 20px; }
-        .card-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 20px; }
-        .card-btn { aspect-ratio: 1; background: #667eea; color: white; border: none; font-size: 10px; cursor: pointer; }
+        .selection h2 { text-align: center; margin-bottom: 10px; }
+        
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            gap: 2px;
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .card-btn {
+            aspect-ratio: 1;
+            background: #667eea;
+            color: white;
+            border: none;
+            font-size: 10px;
+            cursor: pointer;
+        }
         .card-btn.taken { background: #dc3545; opacity: 0.5; cursor: not-allowed; }
         .card-btn.selected { background: #4CAF50; border: 2px solid gold; }
-        .selected-panel { background: #fff3e0; padding: 10px; border-radius: 10px; margin-bottom: 20px; }
-        .badge { display: inline-block; background: #ff9800; color: white; padding: 3px 8px; border-radius: 15px; margin: 2px; font-size: 12px; }
-        .total { font-weight: bold; color: #e65100; text-align: right; margin-top: 10px; }
-        .btn { padding: 12px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        
+        .selected-panel {
+            background: #fff3e0;
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .badge {
+            display: inline-block;
+            background: #ff9800;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 15px;
+            margin: 2px;
+            font-size: 12px;
+        }
+        .total {
+            font-weight: bold;
+            color: #e65100;
+            text-align: right;
+            margin-top: 10px;
+        }
+        
+        .btn {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
         .btn-confirm { background: #4CAF50; color: white; width: 100%; }
-        .btn-clear { background: #dc3545; color: white; }
+        .btn-clear { background: #dc3545; color: white; width: 100%; margin-bottom: 10px; }
+        
         .game-screen { padding: 20px; display: none; }
-        .last-number { background: #4CAF50; color: white; padding: 20px; text-align: center; font-size: 40px; border-radius: 10px; margin-bottom: 20px; }
-        .called-numbers { background: #f0f0f0; padding: 10px; border-radius: 10px; margin-bottom: 20px; max-height: 100px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 5px; }
-        .called-badge { background: #4CAF50; color: white; padding: 3px 8px; border-radius: 15px; font-size: 12px; }
-        .bingo-card { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 20px; }
-        .cell { aspect-ratio: 1; background: white; border: 2px solid #ddd; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; cursor: pointer; }
+        
+        .last-number {
+            background: #4CAF50;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 40px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .called-numbers {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            max-height: 100px;
+            overflow-y: auto;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .called-badge {
+            background: #4CAF50;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 15px;
+            font-size: 12px;
+        }
+        
+        .bingo-card {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+            margin-bottom: 20px;
+        }
+        .cell {
+            aspect-ratio: 1;
+            background: white;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
         .cell.marked { background: #4CAF50; border-color: #4CAF50; color: white; }
         .cell.free { background: #ffd700; border-color: #ffd700; }
-        .bingo-btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #f093fb, #f5576c); color: white; border: none; border-radius: 30px; font-size: 24px; font-weight: bold; cursor: pointer; margin-bottom: 20px; }
-        .admin-btn { width: 100%; padding: 15px; background: #ff9800; color: white; border: none; border-radius: 8px; font-size: 20px; font-weight: bold; cursor: pointer; margin-bottom: 20px; animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
-        .players { background: #f8f9fa; padding: 15px; border-radius: 10px; }
-        .player { display: inline-block; padding: 4px 8px; background: white; border-radius: 15px; margin: 3px; border: 2px solid #ddd; }
+        
+        .bingo-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white;
+            border: none;
+            border-radius: 30px;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .bingo-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .admin-btn {
+            width: 100%;
+            padding: 15px;
+            background: #ff9800;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-bottom: 20px;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+        
+        .players {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+        }
+        .player {
+            display: inline-block;
+            padding: 4px 8px;
+            background: white;
+            border-radius: 15px;
+            margin: 3px;
+            border: 2px solid #ddd;
+        }
         .player.winner { background: gold; border-color: gold; }
-        .message { text-align: center; padding: 10px; margin: 10px 0; border-radius: 8px; display: none; }
+        
+        .message {
+            text-align: center;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 8px;
+            display: none;
+        }
         .success { background: #d4edda; color: #155724; display: block; }
         .error { background: #f8d7da; color: #721c24; display: block; }
-        .back-btn { display: block; text-align: center; padding: 10px; background: #6c757d; color: white; text-decoration: none; border-radius: 8px; margin-top: 15px; }
+        
+        .back-btn {
+            display: block;
+            text-align: center;
+            padding: 10px;
+            background: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
     </style>
 </head>
 <body>
@@ -65,7 +249,7 @@
             
             <div class="card-grid" id="cardGrid"></div>
             
-            <button class="btn btn-clear" id="clearBtn" onclick="clearSelection()" style="display: none; width: 100%; margin-bottom: 10px;">Clear</button>
+            <button class="btn btn-clear" id="clearBtn" onclick="clearSelection()" style="display: none;">Clear</button>
             <button class="btn btn-confirm" id="confirmBtn" onclick="finalize()" disabled>Confirm (0 ETB)</button>
         </div>
         
@@ -106,10 +290,8 @@
         let ws = null;
         let selected = [];
         let myCards = {};
-        let marked = {};
         let called = [];
         let players = [];
-        let taken = new Set();
         let started = false;
         let currentIdx = 0;
         let balance = {{ initial_balance }};
@@ -132,15 +314,16 @@
                 if (data.type === 'connected') {
                     called = data.called || [];
                     started = data.started || false;
+                    players = data.players || [];
                     balance = data.balance || balance;
                     updateBalance();
                     updateCalled();
+                    updatePlayers();
                     
                     if (started) showGame();
                 }
                 else if (data.type === 'your_card') {
                     myCards[data.card_id] = data.card;
-                    marked[data.card_id] = [];
                     
                     if (Object.keys(myCards).length === selected.length) showGame();
                 }
@@ -149,7 +332,7 @@
                 }
                 else if (data.type === 'finalized') {
                     if (data.success) {
-                        showMessage('✅ Ready!', 'success');
+                        showMessage('✅ Ready! Waiting for admin...', 'success');
                         document.getElementById('confirmBtn').disabled = true;
                     }
                 }
@@ -178,8 +361,9 @@
                     
                     const div = document.getElementById('winnerAnnouncement');
                     div.style.display = 'block';
-                    div.innerHTML = `🏆 ${data.winner.name} won! Prize: ${data.winner.prize} ETB`;
+                    div.innerHTML = `🏆 ${data.winner.name} won!<br>Prize: ${data.winner.prize} ETB`;
                     
+                    // Update balance if you won
                     if (data.winner.name.includes('You') || data.winner.user_id == userId) {
                         balance += data.winner.prize;
                         updateBalance();
@@ -202,15 +386,12 @@
         }
         
         function toggleCard(id) {
-            if (taken.has(id) && !selected.includes(id)) {
-                showMessage(`Card #${id} is taken`, 'error');
-                return;
-            }
-            
             const idx = selected.indexOf(id);
-            if (idx >= 0) selected.splice(idx, 1);
-            else if (selected.length < maxCards) selected.push(id);
-            else {
+            if (idx >= 0) {
+                selected.splice(idx, 1);
+            } else if (selected.length < maxCards) {
+                selected.push(id);
+            } else {
                 showMessage(`Max ${maxCards} cards`, 'error');
                 return;
             }
@@ -265,8 +446,8 @@
             document.getElementById('selection').style.display = 'none';
             document.getElementById('game').style.display = 'block';
             
-            const listDiv = document.getElementById('cardsList');
             const ids = Object.keys(myCards).sort((a,b) => parseInt(a)-parseInt(b));
+            const listDiv = document.getElementById('cardsList');
             
             listDiv.innerHTML = ids.map((id, i) => 
                 `<button class="player" onclick="switchCard(${i})" id="cardBtn${i}">Card #${id}</button>`
@@ -280,7 +461,7 @@
             const ids = Object.keys(myCards).sort((a,b) => parseInt(a)-parseInt(b));
             ids.forEach((_, i) => {
                 const btn = document.getElementById(`cardBtn${i}`);
-                if (btn) btn.style.background = i === idx ? '#667eea' : '';
+                if (btn) btn.style.background = i === idx ? '#667eea' : 'white';
             });
             renderCurrentCard();
         }
@@ -291,33 +472,21 @@
             
             const cardId = ids[currentIdx];
             const card = myCards[cardId];
-            const markedNums = marked[cardId] || [];
             
             let html = '<div class="bingo-card">';
             for (let r = 0; r < 5; r++) {
                 for (let c = 0; c < 5; c++) {
                     const num = card[c][r];
-                    const isMarked = num === 'FREE' || markedNums.includes(num) || called.includes(num);
-                    html += `<div class="cell ${num === 'FREE' ? 'free' : ''} ${isMarked ? 'marked' : ''}" onclick="markNumber(${cardId}, ${num})">${num}</div>`;
+                    const isMarked = num === 'FREE' || called.includes(num);
+                    html += `<div class="cell ${num === 'FREE' ? 'free' : ''} ${isMarked ? 'marked' : ''}">${num}</div>`;
                 }
             }
             html += '</div>';
             document.getElementById('currentCard').innerHTML = html;
         }
         
-        function markNumber(cardId, num) {
-            if (!started || num === 'FREE' || !called.includes(num)) return;
-            if (marked[cardId] && marked[cardId].includes(num)) return;
-            
-            ws.send(JSON.stringify({type: 'mark_number', card_id: cardId, number: num}));
-        }
-        
         function claimBingo() {
             if (!started) return;
-            const ids = Object.keys(myCards).sort((a,b) => parseInt(a)-parseInt(b));
-            if (ids.length === 0) return;
-            
-            ws.send(JSON.stringify({type: 'check_bingo', card_id: parseInt(ids[currentIdx])}));
             showMessage('BINGO claimed!', 'info');
         }
         
@@ -334,7 +503,7 @@
         
         function updatePlayers() {
             document.getElementById('playersList').innerHTML = players.map(p => 
-                `<span class="player ${p.winner ? 'winner' : ''}">${p.name || `Player${p.id}`} (${p.cards?.length || 0})</span>`
+                `<span class="player">${p.name || `Player${p.id}`}</span>`
             ).join('');
         }
         
