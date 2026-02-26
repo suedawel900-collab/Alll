@@ -1,8 +1,8 @@
 import os
-import subprocess
 import sys
-import time
+import subprocess
 import threading
+import time
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -17,33 +17,62 @@ def run_bot():
         logger.error(f"Bot error: {e}")
 
 def run_webapp():
-    """Run the webapp server"""
+    """Run the web server"""
     try:
         port = int(os.getenv('PORT', 8000))
-        logger.info(f"🌐 Starting webapp on port {port}...")
+        logger.info(f"🌐 Starting web server on port {port}...")
         subprocess.run([
-            sys.executable, "-m", "uvicorn", 
-            "webapp:app", 
-            "--host", "0.0.0.0", 
+            sys.executable, "-m", "uvicorn",
+            "webapp:app",
+            "--host", "0.0.0.0",
             "--port", str(port)
         ])
     except Exception as e:
         logger.error(f"Webapp error: {e}")
 
+def generate_cards_if_needed():
+    """Generate bingo cards if they don't exist"""
+    import json
+    import random
+    import os
+    
+    cards_file = "static/bingo_cards.json"
+    if os.path.exists(cards_file):
+        logger.info("✅ Cards already exist")
+        return
+    
+    logger.info("📊 Generating 1000 bingo cards...")
+    os.makedirs("static", exist_ok=True)
+    
+    cards = []
+    for card_id in range(1, 1001):
+        card = []
+        ranges = [(1, 15), (16, 30), (31, 45), (46, 60), (61, 75)]
+        
+        for col in range(5):
+            min_num, max_num = ranges[col]
+            numbers = random.sample(range(min_num, max_num + 1), 5)
+            card.append(numbers)
+        
+        card[2][2] = "FREE"
+        cards.append({"id": card_id, "card": card})
+    
+    with open(cards_file, "w") as f:
+        json.dump(cards, f)
+    
+    logger.info(f"✅ Generated {len(cards)} cards")
+
 if __name__ == "__main__":
-    logger.info("🚀 Starting Bingo Game Server...")
+    logger.info("🚀 Starting Bingo Game System...")
     
-    # Generate cards if they don't exist
-    if not os.path.exists("static/bingo_cards.json"):
-        logger.info("📊 Generating bingo cards...")
-        import generate_cards
-        generate_cards.generate_bingo_cards(1000)
-    
-    # Create static directory if it doesn't exist
+    # Create necessary directories
     os.makedirs("static", exist_ok=True)
     os.makedirs("templates", exist_ok=True)
     
-    # Run both services
+    # Generate cards
+    generate_cards_if_needed()
+    
+    # Start bot in background
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
