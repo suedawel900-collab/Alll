@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+body{font-family:Arial;text-align:center;background:#b993d6;}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:10px;}
+.cell{padding:15px;background:white;border-radius:6px;}
+</style>
+</head>
+<body>
+
+<h2>Bingo Game</h2>
+<div class="grid" id="card"></div>
+
+<script>
+let grid=document.getElementById("card");
+for(let i=0;i<25;i++){
+ let d=document.createElement("div");
+ d.className="cell";
+ d.innerText=Math.floor(Math.random()*75)+1;
+ grid.appendChild(d);
+}
+</script>
+
+</body>
+</html>
