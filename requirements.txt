@@ -5,3 +5,6 @@ psycopg2-binary
 python-telegram-bot==20.7
 jinja2
 python-dotenv
+python-telegram-bot==20.7
+SQLAlchemy
+psycopg2-binary
